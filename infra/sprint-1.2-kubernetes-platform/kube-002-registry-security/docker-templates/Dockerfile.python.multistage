@@ -1,0 +1,21 @@
+# Multi-stage Python template — install with uv + lockfile (no pip).
+ARG PYTHON_VERSION=3.14-slim
+FROM python:${PYTHON_VERSION} AS builder
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+WORKDIR /app
+ENV UV_COMPILE_BYTECODE=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+COPY pyproject.toml uv.lock README.md ./
+COPY citycouncil ./citycouncil
+RUN uv sync --frozen --no-dev --no-editable
+
+FROM python:${PYTHON_VERSION} AS runtime
+WORKDIR /app
+RUN useradd --create-home --uid 10001 appuser
+COPY --from=builder /app/.venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+# COPY citycouncil ./citycouncil  # if not baked into venv site-packages
+USER appuser
+EXPOSE 8000
+# CMD ["citycouncil", "serve"]

@@ -1,0 +1,3 @@
+ordinance_id,meeting_id,meeting_date,title,sponsor_id,introduced_date,topic_tags,meeting_body,location,meeting_status
+ord-csv-9001,meet-csv-2024-01,2024-06-01,TIF district boundary adjustment,member-ward-1,2024-05-01,budget|TIF,Regular session,City Hall,completed
+ord-csv-9002,meet-csv-2024-01,2024-06-01,Street lighting upgrades,member-ward-2,2024-05-10,infrastructure|public-safety,,City Hall,completed

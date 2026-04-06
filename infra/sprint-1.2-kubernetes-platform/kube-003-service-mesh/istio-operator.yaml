@@ -1,0 +1,32 @@
+# Istio control plane — mTLS, ingress gateway, Zipkin-compatible tracing to Jaeger.
+# istioctl install -f istio-operator.yaml
+#
+# Requires Jaeger (or Zipkin-compatible collector) reachable at zipkin.istio-system:9411
+# — see jaeger-all-in-one.yaml
+
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: citycouncil-istio
+  namespace: istio-system
+spec:
+  profile: default
+  meshConfig:
+    enableTracing: true
+    defaultConfig:
+      tracing:
+        sampling: 100
+        zipkin:
+          address: zipkin.istio-system:9411
+  components:
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          replicaCount: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi

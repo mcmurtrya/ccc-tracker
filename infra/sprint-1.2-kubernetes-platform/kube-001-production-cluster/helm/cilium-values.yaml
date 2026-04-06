@@ -1,0 +1,27 @@
+# Cilium CNI — network policies + CiliumNetworkPolicy support.
+# On EKS: migrate from aws-node (VPC CNI) per Cilium docs before applying.
+# Ref: https://docs.cilium.io/en/stable/installation/k8s-install-helm/
+#
+# helm repo add cilium https://helm.cilium.io/
+# helm install cilium cilium/cilium -n kube-system -f cilium-values.yaml
+
+kubeProxyReplacement: strict
+
+# EKS / ENI mode (when replacing VPC CNI):
+# eni:
+#   enabled: true
+
+ipam:
+  mode: kubernetes
+
+operator:
+  replicas: 2
+
+hubble:
+  enabled: true
+  relay:
+    enabled: true
+  ui:
+    enabled: true
+
+policyEnforcementMode: default

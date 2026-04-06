@@ -1,0 +1,65 @@
+# Minimal Jaeger all-in-one with Zipkin ingest on :9411 for Istio proxy tracing.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: istio-system
+  labels:
+    app: jaeger
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+    spec:
+      containers:
+        - name: jaeger
+          image: jaegertracing/all-in-one:1.57
+          env:
+            - name: COLLECTOR_ZIPKIN_HOST_PORT
+              value: ":9411"
+          ports:
+            - containerPort: 9411
+              name: zipkin
+            - containerPort: 16686
+              name: http-query
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zipkin
+  namespace: istio-system
+  labels:
+    app: jaeger
+spec:
+  ports:
+    - name: http
+      port: 9411
+      targetPort: zipkin
+  selector:
+    app: jaeger
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tracing
+  namespace: istio-system
+  labels:
+    app: jaeger
+spec:
+  ports:
+    - name: http-query
+      port: 16686
+      targetPort: http-query
+  selector:
+    app: jaeger

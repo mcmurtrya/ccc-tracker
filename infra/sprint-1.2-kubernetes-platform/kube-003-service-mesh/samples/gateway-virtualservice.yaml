@@ -1,0 +1,59 @@
+# Traffic management: ingress through istio-ingressgateway + routing / load balancing.
+# Replace hosts and service backends with your workloads (namespace must have istio-injection=enabled).
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: citycouncil-gateway
+  namespace: citycouncil-apps
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: citycouncil-tls
+      hosts:
+        - api.citycouncil.example
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: citycouncil-api
+  namespace: citycouncil-apps
+spec:
+  hosts:
+    - api.citycouncil.example
+  gateways:
+    - citycouncil-gateway
+  http:
+    - route:
+        - destination:
+            host: api-service
+            port:
+              number: 8080
+          weight: 100
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: api-service
+  namespace: citycouncil-apps
+spec:
+  host: api-service
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s

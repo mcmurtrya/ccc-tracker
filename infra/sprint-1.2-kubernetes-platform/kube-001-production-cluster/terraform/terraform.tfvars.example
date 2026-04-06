@@ -1,0 +1,10 @@
+aws_region            = "us-east-1"
+cluster_name          = "citycouncil-prod"
+cluster_version       = "1.28"
+worker_desired_size   = 6
+worker_instance_types   = ["m5.large"]
+vpc_cidr              = "10.0.0.0/16"
+tags = {
+  Project     = "citycouncil"
+  Environment = "production"
+}

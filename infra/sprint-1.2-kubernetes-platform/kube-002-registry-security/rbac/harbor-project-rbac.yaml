@@ -1,0 +1,37 @@
+# RBAC for teams pushing/pulling from Harbor via Kubernetes (CI robots use robot accounts in Harbor;
+# this maps in-cluster workloads that need registry credentials via external-secrets or similar.)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: harbor
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: harbor-ci-deployer
+  namespace: harbor
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: harbor-pull-secret-reader
+  namespace: harbor
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["harbor-registry-credentials"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: harbor-ci-deployer-binding
+  namespace: harbor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: harbor-pull-secret-reader
+subjects:
+  - kind: ServiceAccount
+    name: harbor-ci-deployer
+    namespace: harbor

@@ -1,0 +1,120 @@
+CHICAGO eLMS + LLM + VISION — CONSOLIDATED IMPLEMENTATION PLAN
+================================================================
+Domain: City Council legislative data (meetings, votes, ordinances, PDF agendas/minutes).
+Principle: Ship vertical slices early — API + Postgres + one LLM path before PDF/Neo4j scale-out.
+
+Existing repo work: infra/sprint-1.2-kubernetes-platform/ (KUBE-001..003: EKS-style cluster,
+Cilium/ingress values, Harbor, Istio/Jaeger samples). Treat that as Phase 1 “Kubernetes track”
+optional if you deploy on managed K8s; otherwise use managed services (RDS, MSK, etc.).
+
+-------------------------------------------------------------------------------
+PHASE 0 — SCOPING & SCHEMA (1–2 weeks)
+-------------------------------------------------------------------------------
+Goal: Lock the relational model; everything else hangs off Postgres.
+
+Tickets:
+  P0-001  Requirements & source-of-truth matrix (eLMS API fields vs PDF vs CSV).
+  P0-002  ERD + migrations for core tables: meetings, members, ordinances, agenda_items,
+          votes, vote_members, document_artifacts (PDF hash, URI, parse status).
+  P0-003  Idempotency keys & cursor strategy for API poller (meeting_id / updated_since).
+  P0-004  Non-functional: retention, PII policy, rate limits for public API.
+
+Exit: Approved schema; ingestion can target real columns; no Neo4j/graph yet.
+
+-------------------------------------------------------------------------------
+PHASE 1 — FOUNDATION: RUNTIME + EVENT BUS + OBSERVABILITY (4–8 weeks)
+-------------------------------------------------------------------------------
+Goal: Repeatable deploys, async pipelines, traces/metrics. Prefer managed services at
+small scale; K8s + Kafka when you need multi-tenant workers and strict ordering.
+
+Track A — Orchestration (choose one primary path)
+  P1-A1  CI/CD: build/test/deploy for API workers and future services.
+  P1-A2  Secrets management (e.g. AWS Secrets Manager / Vault) + rotation story.
+  P1-A3  If using K8s: namespace, quotas, network policy baseline (see repo manifests).
+
+Track B — Messaging (replace “polling only” with durable events)
+  P1-B1  Message backbone: Kafka OR Redis Streams OR SQS+FIFO (document choice).
+  P1-B2  Topics/queues: raw.api.fetch, raw.pdf.uploaded, normalized.record, deadletter.*.
+  P1-B3  Schema: JSON Schema or Avro for envelope {source, occurred_at, idempotency_key, payload_ref}.
+  P1-B4  Observability: structured logs, metrics, tracing (OpenTelemetry) on producers/consumers.
+
+Track C — Infra alignment (optional; maps to sprint-1.2 in repo)
+  P1-C1  KUBE-001..003 as already drafted OR equivalent managed ingress/registry/mesh.
+
+Exit: Empty workers can deploy; publish/consume test events; dashboards show lag/error rate.
+
+-------------------------------------------------------------------------------
+PHASE 2 — INGESTION & PROCESSING (8–12 weeks)
+-------------------------------------------------------------------------------
+Goal: Three paths from plan: API poller, PDF/Vision, CSV — each producing normalized
+records + audit trail. LLM/embedding/classifier behind queues with retries and cost caps.
+
+Sprint 2.1 — API + normalization (vertical slice)
+  P2-101  API Poller service: httpx, backoff, ETag/If-Modified-Since where supported.
+  P2-102  Normalize JSON → internal schema; write meetings/votes/ordinances idempotently.
+  P2-103  DLQ + replay tooling for bad payloads.
+
+Sprint 2.2 — PDF capture & Vision/OCR pipeline
+  P2-201  Object storage for raw PDFs; content-hash dedup; metadata sidecar.
+  P2-202  PDF worker: PyMuPDF/pdfminer baseline + VT/OCR path (LayoutLMv3/Donut/PaddleOCR — pick one).
+  P2-203  Confidence scores; human review queue for low-confidence pages.
+  P2-204  Extracted text → chunks linked to meeting_id / agenda_item sequence.
+
+Sprint 2.3 — CSV bulk backfill
+  P2-301  CSV loader: validate columns, dedupe against DB, bulk insert to staging.
+  P2-302  Reconciliation report (counts, orphan rows).
+
+Sprint 2.4 — LLM + embeddings + classification (async)
+  P2-401  LLM Extractor: Claude (or chosen model) with schema-enforced JSON output; prompt versioning.
+  P2-402  Embedding job: sentence-transformers or API; store vectors in pgvector with model_id + dim.
+  P2-403  Topic classifier: taxonomy from architecture; store tags[] on ordinance/agenda.
+  P2-404  Rate limits, batching, cost accounting per job.
+  P2-405  LLM-003 Advanced queues: priority by source freshness; resource-aware workers;
+          dependency chains (e.g. embed after extract succeeds).
+
+Exit: End-to-end: API + at least one PDF type through extract/embed/tag; metrics on job latency.
+
+-------------------------------------------------------------------------------
+PHASE 3 — STORAGE & CONSISTENCY (6–10 weeks)
+-------------------------------------------------------------------------------
+Goal: Postgres + pgvector as system of record; Neo4j only if graph queries justify ops cost.
+
+  P3-001  Harden Postgres: indexes, partitions for large vote/activity tables, PgBouncer.
+  P3-002  pgvector: HNSW/IVFFlat; ANN benchmarks; filter by date/body/topic.
+  P3-003  Neo4j (optional): sync worker from Postgres events; nodes/edges as in architecture doc.
+  P3-004  Consistency: outbox pattern or saga from primary DB to graph/vector updates;
+          embedding version invalidation when text changes.
+  P3-005  Backups, PITR, restore drill.
+
+Exit: Search and analytics read paths stable; no silent drift between stores.
+
+-------------------------------------------------------------------------------
+PHASE 4 — INTELLIGENCE & APPLICATIONS (8–12 weeks)
+-------------------------------------------------------------------------------
+  P4-101  RAG API: retrieve (pgvector + filters) → cite → LLM answer with citations.
+  P4-102  Pattern analytics: SQL + optional sklearn clustering on vote matrices.
+  P4-103  Lifecycle UI/API: graph or recursive SQL for ordinance journey + narrative summary.
+  P4-201  Resident UI: Next.js or Streamlit — NL search + structured filters (ward, date, topic).
+  P4-202  Ward dashboard: participation, topic mix, exports.
+  P4-203  Alerts/digest: subscriptions, diff since last run, email/SMS via SendGrid/Twilio.
+
+Exit: Pilot with real users; accessibility and citation accuracy review.
+
+-------------------------------------------------------------------------------
+CROSS-CUTTING (ongoing)
+-------------------------------------------------------------------------------
+  XC-01  Data quality: Great Expectations or dbt tests on staging vs prod parity.
+  XC-02  Security: API keys, least-privilege DB roles, audit log for admin actions.
+  XC-03  Legal/compliance: terms of use for derived data; no misrepresentation of official records.
+
+-------------------------------------------------------------------------------
+ORDER OF EXECUTION (summary)
+-------------------------------------------------------------------------------
+0 → Schema lock
+1 → Events + deploy + observability (+ optional K8s track in repo)
+2 → API path + PDF path + CSV + LLM/embed/classify queues
+3 → Vector + optional graph + consistency
+4 → RAG, analytics, lifecycle, apps
+
+This file supersedes fragmented “LMS/student/course” ticket drafts from tooling; all tickets
+above are aligned to the Chicago legislative domain described in the original architecture.

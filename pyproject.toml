@@ -1,0 +1,72 @@
+[project]
+name = "citycouncil"
+version = "0.1.0"
+description = "Chicago City Council legislative data ingestion and API"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.13",
+    "asyncpg>=0.29",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "pgvector>=0.3",
+    "pillow>=10.0",
+    "psycopg2-binary>=2.9",
+    "pydantic-settings>=2.0",
+    "pymupdf>=1.27.2.2",
+    "pytesseract>=0.3.10",
+    "sqlalchemy[asyncio]>=2.0",
+    "uvicorn[standard]>=0.30",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=7.1.0",
+    "testcontainers[postgres]>=4.0",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[project.scripts]
+citycouncil = "citycouncil.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["citycouncil"]
+
+[tool.pytest.ini_options]
+# Used only when pytest is started with no paths and cwd is the project root.
+# From a subdirectory (e.g. package folder), run: uv run pytest tests/  or  uv run pytest ../tests
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: requires Docker + testcontainers (Postgres)",
+]
+addopts = [
+    "--cov=citycouncil",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-fail-under=64",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["citycouncil"]
+omit = [
+    "citycouncil/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+precision = 1
+skip_covered = true

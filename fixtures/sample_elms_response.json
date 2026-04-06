@@ -1,0 +1,55 @@
+{
+  "meetings": [
+    {
+      "id": "demo-meeting-2024-001",
+      "date": "2024-03-15",
+      "body": "City Council",
+      "location": "Council Chambers",
+      "status": "completed",
+      "members": [
+        {
+          "id": "member-ward-1",
+          "name": "Alex Johnson",
+          "ward": 1,
+          "body": "Alderman"
+        },
+        {
+          "id": "member-ward-2",
+          "name": "Sam Rivera",
+          "ward": 2,
+          "body": "Alderman"
+        }
+      ],
+      "ordinances": [
+        {
+          "id": "ord-2024-101",
+          "title": "Amendment to zoning map for district 12",
+          "sponsor_id": "member-ward-1",
+          "introduced_date": "2024-02-01",
+          "topic_tags": ["zoning", "infrastructure"]
+        }
+      ],
+      "agenda_items": [
+        {
+          "sequence": 1,
+          "ordinance_id": "ord-2024-101",
+          "raw_text": "Zoning map amendment — first reading."
+        }
+      ],
+      "votes": [
+        {
+          "id": "vote-ord-2024-101-final",
+          "ordinance_id": "ord-2024-101",
+          "result": "passed",
+          "ayes": 40,
+          "nays": 5,
+          "abstentions": 5,
+          "members": [
+            { "member_id": "member-ward-1", "position": "aye" },
+            { "member_id": "member-ward-2", "position": "nay" }
+          ]
+        }
+      ]
+    }
+  ]
+}

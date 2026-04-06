@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: citycouncil
+      POSTGRES_PASSWORD: citycouncil
+      POSTGRES_DB: citycouncil
+    # Host 5433 avoids clashing with a local Postgres on 127.0.0.1:5432 (common on WSL/Linux).
+    ports:
+      - "5433:5432"
+    volumes:
+      - citycouncil_pg:/var/lib/postgresql/data
+
+volumes:
+  citycouncil_pg:

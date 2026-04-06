@@ -1,0 +1,12 @@
+# Baseline deny-all for a namespace; pair with explicit allows per app.
+# Apply after workloads have namespaces (example: citycouncil-apps).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress-egress
+  namespace: citycouncil-apps
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress

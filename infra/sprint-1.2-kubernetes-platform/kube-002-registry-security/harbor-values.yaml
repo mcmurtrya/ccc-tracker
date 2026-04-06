@@ -1,0 +1,53 @@
+# Harbor private registry + Trivy vulnerability scanning.
+# helm repo add harbor https://helm.goharbor.io
+# helm install harbor harbor/harbor -n harbor --create-namespace -f harbor-values.yaml
+#
+# TLS: replace secrets.ingress, or use cert-manager ClusterIssuer.
+
+expose:
+  type: ingress
+  tls:
+    enabled: true
+    certSource: secret
+    secret:
+      secretName: harbor-tls
+  ingress:
+    hosts:
+      core: harbor.citycouncil.example
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+externalURL: https://harbor.citycouncil.example
+
+# Trivy scanner (ticket: Trivy scanning)
+trivy:
+  enabled: true
+  replicas: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+
+# Image signing — Notary (Harbor integrated)
+notary:
+  enabled: true
+
+# Push policy / content trust can be enforced via Harbor project settings + Notary.
+
+database:
+  type: internal
+redis:
+  type: internal
+
+registry:
+  replicas: 2
+
+core:
+  replicas: 2
+
+jobservice:
+  replicas: 2
+
+chartmuseum:
+  enabled: false

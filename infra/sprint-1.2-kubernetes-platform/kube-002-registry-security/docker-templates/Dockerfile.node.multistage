@@ -1,0 +1,19 @@
+# Multi-stage Node.js template — build with dev deps, run minimal production image.
+ARG NODE_VERSION=22-alpine
+FROM node:${NODE_VERSION} AS builder
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:${NODE_VERSION} AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+RUN addgroup -g 10001 app && adduser -D -u 10001 -G app appuser
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY package.json ./
+USER appuser
+EXPOSE 3000
+# CMD ["node", "dist/main.js"]
