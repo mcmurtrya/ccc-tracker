@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from citycouncil.config import Settings, database_url_sync, get_settings
 
 
@@ -23,3 +25,13 @@ def test_database_url_sync_rewrites_asyncpg() -> None:
 def test_database_url_sync_passthrough_other_schemes() -> None:
     u = "postgresql://u:p@localhost/db"
     assert database_url_sync(u) is u
+
+
+def test_settings_rejects_search_max_below_default() -> None:
+    with pytest.raises(ValueError, match="search_max_limit"):
+        Settings(search_default_limit=20, search_max_limit=10)
+
+
+def test_settings_rejects_activity_max_below_default() -> None:
+    with pytest.raises(ValueError, match="activity_max_limit"):
+        Settings(activity_default_limit=100, activity_max_limit=50)

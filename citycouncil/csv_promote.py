@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,11 +21,23 @@ from citycouncil.db.models import (
 )
 from citycouncil.parsing import coerce_topic_tags
 
+T = TypeVar("T")
+
 
 def _parse_iso_date(value: Any) -> date | None:
     if value is None or str(value).strip() == "":
         return None
     return date.fromisoformat(str(value).strip()[:10])
+
+
+def _strip_or_none(value: Any) -> str | None:
+    s = (str(value) if value is not None else "").strip()
+    return s if s else None
+
+
+def _apply_core_attrs(obj: Any, core: dict[str, Any]) -> None:
+    for k, v in core.items():
+        setattr(obj, k, v)
 
 
 async def upsert_meeting_from_csv_payload(session: AsyncSession, payload: dict[str, Any]) -> Meeting:
@@ -36,14 +49,13 @@ async def upsert_meeting_from_csv_payload(session: AsyncSession, payload: dict[s
     existing = q.scalar_one_or_none()
     core = {
         "meeting_date": mdate,
-        "body": (payload.get("meeting_body") or "").strip() or None,
-        "location": (payload.get("location") or "").strip() or None,
-        "status": (payload.get("meeting_status") or "").strip() or None,
+        "body": _strip_or_none(payload.get("meeting_body")),
+        "location": _strip_or_none(payload.get("location")),
+        "status": _strip_or_none(payload.get("meeting_status")),
         "raw_json": payload,
     }
     if existing:
-        for k, v in core.items():
-            setattr(existing, k, v)
+        _apply_core_attrs(existing, core)
         await session.flush()
         return existing
     m = Meeting(external_id=ext, **core)
@@ -59,7 +71,7 @@ async def upsert_ordinance_from_csv_payload(session: AsyncSession, payload: dict
         raise ValueError("title is required for promotion")
     intro = _parse_iso_date(payload.get("introduced_date"))
     tags = coerce_topic_tags(payload.get("topic_tags"))
-    sponsor = (payload.get("sponsor_id") or "").strip() or None
+    sponsor = _strip_or_none(payload.get("sponsor_id"))
 
     q = await session.execute(select(Ordinance).where(Ordinance.external_id == ext))
     existing = q.scalar_one_or_none()
@@ -71,8 +83,7 @@ async def upsert_ordinance_from_csv_payload(session: AsyncSession, payload: dict
         "raw_json": payload,
     }
     if existing:
-        for k, v in core.items():
-            setattr(existing, k, v)
+        _apply_core_attrs(existing, core)
         await session.flush()
         return existing
     o = Ordinance(external_id=ext, **core)
@@ -130,6 +141,14 @@ def _batch_filter(batch_id: uuid.UUID | None):
     return CsvImportStagingRow.batch_id == batch_id
 
 
+async def _count_staging_rows(session: AsyncSession, *conditions: Any) -> int:
+    q = select(func.count()).select_from(CsvImportStagingRow)
+    conds = [c for c in conditions if c is not None]
+    if conds:
+        q = q.where(and_(*conds))
+    return int(await session.scalar(q) or 0)
+
+
 async def reconciliation_report(
     session: AsyncSession,
     batch_id: uuid.UUID | None = None,
@@ -137,54 +156,36 @@ async def reconciliation_report(
     """P2-302: counts and orphan checks between staging and core tables."""
     bf = _batch_filter(batch_id)
 
-    total_q = select(func.count()).select_from(CsvImportStagingRow)
-    if bf is not None:
-        total_q = total_q.where(bf)
-    total = int(await session.scalar(total_q) or 0)
+    total = await _count_staging_rows(session, bf)
 
     by_status: dict[str, int] = {}
     for status in CsvStagingRowStatus:
-        q = select(func.count()).select_from(CsvImportStagingRow).where(CsvImportStagingRow.status == status)
-        if bf is not None:
-            q = q.where(bf)
-        by_status[status.value] = int(await session.scalar(q) or 0)
+        by_status[status.value] = await _count_staging_rows(
+            session,
+            bf,
+            CsvImportStagingRow.status == status,
+        )
 
-    acc_cond = [CsvImportStagingRow.status == CsvStagingRowStatus.accepted]
+    acc_cond: list[Any] = [CsvImportStagingRow.status == CsvStagingRowStatus.accepted]
     if bf is not None:
         acc_cond.append(bf)
 
-    accepted_total = int(
-        await session.scalar(select(func.count()).select_from(CsvImportStagingRow).where(and_(*acc_cond))) or 0
+    accepted_total = await _count_staging_rows(session, *acc_cond)
+    promoted_n = await _count_staging_rows(
+        session,
+        *acc_cond,
+        CsvImportStagingRow.promoted_at.isnot(None),
     )
-    promoted_n = int(
-        await session.scalar(
-            select(func.count())
-            .select_from(CsvImportStagingRow)
-            .where(and_(*acc_cond, CsvImportStagingRow.promoted_at.isnot(None)))
-        )
-        or 0
+    pending_n = await _count_staging_rows(
+        session,
+        *acc_cond,
+        CsvImportStagingRow.promoted_at.is_(None),
+        CsvImportStagingRow.promotion_error.is_(None),
     )
-    pending_n = int(
-        await session.scalar(
-            select(func.count())
-            .select_from(CsvImportStagingRow)
-            .where(
-                and_(
-                    *acc_cond,
-                    CsvImportStagingRow.promoted_at.is_(None),
-                    CsvImportStagingRow.promotion_error.is_(None),
-                )
-            )
-        )
-        or 0
-    )
-    promotion_failed_n = int(
-        await session.scalar(
-            select(func.count())
-            .select_from(CsvImportStagingRow)
-            .where(and_(*acc_cond, CsvImportStagingRow.promotion_error.isnot(None)))
-        )
-        or 0
+    promotion_failed_n = await _count_staging_rows(
+        session,
+        *acc_cond,
+        CsvImportStagingRow.promotion_error.isnot(None),
     )
 
     meetings_n = int(await session.scalar(select(func.count()).select_from(Meeting)) or 0)
@@ -245,25 +246,36 @@ async def reconciliation_report(
     }
 
 
-async def promote_standalone(batch_id: uuid.UUID | None = None) -> PromoteResult:
+async def _with_standalone_session(
+    fn: Callable[[AsyncSession], Awaitable[T]],
+    *,
+    commit: bool,
+) -> T:
     from citycouncil.config import get_settings
     from citycouncil.db.session import standalone_session
 
     settings = get_settings()
     async with standalone_session(settings) as session:
         try:
-            result = await promote_accepted_staging(session, batch_id=batch_id)
-            await session.commit()
+            result = await fn(session)
+            if commit:
+                await session.commit()
             return result
         except Exception:
-            await session.rollback()
+            if commit:
+                await session.rollback()
             raise
 
 
-async def reconciliation_standalone(batch_id: uuid.UUID | None = None) -> dict[str, Any]:
-    from citycouncil.config import get_settings
-    from citycouncil.db.session import standalone_session
+async def promote_standalone(batch_id: uuid.UUID | None = None) -> PromoteResult:
+    return await _with_standalone_session(
+        lambda s: promote_accepted_staging(s, batch_id=batch_id),
+        commit=True,
+    )
 
-    settings = get_settings()
-    async with standalone_session(settings) as session:
-        return await reconciliation_report(session, batch_id=batch_id)
+
+async def reconciliation_standalone(batch_id: uuid.UUID | None = None) -> dict[str, Any]:
+    return await _with_standalone_session(
+        lambda s: reconciliation_report(s, batch_id=batch_id),
+        commit=False,
+    )

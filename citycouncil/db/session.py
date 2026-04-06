@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from citycouncil.config import Settings, get_settings
 
@@ -11,23 +11,10 @@ def make_engine(settings: Settings | None = None):
     return create_async_engine(settings.database_url, echo=False)
 
 
-def make_session_factory(engine=None):
-    engine = engine or make_engine()
-    return async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-
-
-@asynccontextmanager
-async def session_scope() -> AsyncIterator[AsyncSession]:
-    factory = make_session_factory()
-    session = factory()
-    try:
-        yield session
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
-    finally:
-        await session.close()
+def make_session_factory(engine: AsyncEngine | None = None):
+    """Return an async session factory. Pass ``engine`` (as FastAPI does); if omitted, a new engine is created."""
+    eng = engine or make_engine()
+    return async_sessionmaker(eng, expire_on_commit=False, class_=AsyncSession)
 
 
 @asynccontextmanager

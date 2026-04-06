@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 from datetime import datetime, timezone
 from email.utils import format_datetime
-from typing import Any
+from citycouncil.activity import ActivityItem
 
 
 def _pub_date(iso: str) -> str:
@@ -15,7 +15,7 @@ def _pub_date(iso: str) -> str:
     return format_datetime(dt, usegmt=True)
 
 
-def _item_title(item: dict[str, Any]) -> str:
+def _item_title(item: ActivityItem) -> str:
     kind = item["kind"]
     if kind == "meeting":
         m = item["meeting"]
@@ -31,7 +31,7 @@ def _item_title(item: dict[str, Any]) -> str:
     return kind
 
 
-def _item_link(item: dict[str, Any], base_url: str) -> str:
+def _item_link(item: ActivityItem, base_url: str) -> str:
     base = base_url.rstrip("/")
     kind = item["kind"]
     if kind == "meeting":
@@ -46,7 +46,7 @@ def _item_link(item: dict[str, Any], base_url: str) -> str:
     return base
 
 
-def _item_description(item: dict[str, Any]) -> str:
+def _item_description(item: ActivityItem) -> str:
     kind = item["kind"]
     if kind == "meeting":
         m = item["meeting"]
@@ -69,7 +69,7 @@ def _item_description(item: dict[str, Any]) -> str:
 
 
 def render_activity_rss(
-    items: list[dict[str, Any]],
+    items: list[ActivityItem],
     *,
     feed_title: str,
     feed_link: str,

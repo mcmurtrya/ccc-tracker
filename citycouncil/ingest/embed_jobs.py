@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import TypedDict
 from uuid import UUID
 
 from sqlalchemy import select
@@ -22,7 +22,25 @@ logger = logging.getLogger(__name__)
 JOB_EMBED_CHUNK = "embed_chunk"
 
 
-def _mark_embed_job_failed(job: LlmJob, msg: str, stats: dict[str, Any]) -> None:
+class EmbedProcessStats(TypedDict):
+    """Counters returned by :func:`process_embed_jobs`."""
+
+    jobs_fetched: int
+    jobs_ok: int
+    jobs_failed: int
+    batches: int
+
+
+class EmbedRunStandaloneResult(TypedDict):
+    """Return value of :func:`embed_run_standalone`."""
+
+    enqueued: int
+    process: EmbedProcessStats | None
+    enqueue_only: bool
+    process_only: bool
+
+
+def _mark_embed_job_failed(job: LlmJob, msg: str, stats: EmbedProcessStats) -> None:
     job.status = "failed"
     job.error = msg
     stats["jobs_failed"] += 1
@@ -92,7 +110,7 @@ async def _fetch_pending_jobs(session: AsyncSession, limit: int) -> list[LlmJob]
 async def _collect_embed_work(
     session: AsyncSession,
     batch: list[LlmJob],
-    stats: dict[str, Any],
+    stats: EmbedProcessStats,
 ) -> list[tuple[LlmJob, DocumentChunk]]:
     """Resolve jobs to ``(job, chunk)`` pairs that still need embedding."""
     work: list[tuple[LlmJob, DocumentChunk]] = []
@@ -119,16 +137,16 @@ async def _collect_embed_work(
     return work
 
 
-async def process_embed_jobs(session: AsyncSession, settings: Settings) -> dict[str, Any]:
+async def process_embed_jobs(session: AsyncSession, settings: Settings) -> EmbedProcessStats:
     """Process pending ``embed_chunk`` jobs (batched embedding HTTP calls)."""
-    if not settings.huggingface_token:
+    if not settings.huggingface_token_value():
         raise ValueError("CITYCOUNCIL_HUGGINGFACE_TOKEN is not set (see embeddings_huggingface.py)")
     model = settings.huggingface_embedding_model
     batch_size = settings.embed_batch_size
     proc_limit = settings.embed_process_limit
     embed_kw = hf_feature_extraction_call_kwargs(settings, for_query=False)
 
-    stats: dict[str, Any] = {
+    stats: EmbedProcessStats = {
         "jobs_fetched": 0,
         "jobs_ok": 0,
         "jobs_failed": 0,
@@ -190,7 +208,7 @@ async def embed_run_standalone(
     process_only: bool = False,
     enqueue_limit: int | None = None,
     process_limit: int | None = None,
-) -> dict[str, Any]:
+) -> EmbedRunStandaloneResult:
     """Enqueue and/or process embedding jobs (Hugging Face Inference)."""
     base = settings or get_settings()
     upd: dict[str, int] = {}
@@ -200,7 +218,7 @@ async def embed_run_standalone(
         upd["embed_process_limit"] = process_limit
     settings = base.model_copy(update=upd) if upd else base
 
-    out: dict[str, Any] = {
+    out: EmbedRunStandaloneResult = {
         "enqueued": 0,
         "process": None,
         "enqueue_only": enqueue_only,

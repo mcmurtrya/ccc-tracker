@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import httpx
@@ -12,9 +12,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from citycouncil.activity import ActivityFeedResponse
 from citycouncil.activity_query import run_activity_feed
 from citycouncil.auth import verify_admin
-from citycouncil.config import get_settings
+from citycouncil.config import Settings, get_settings
 from citycouncil.csv_promote import promote_accepted_staging, reconciliation_report
 from citycouncil.db.models import IngestDLQ, Meeting
 from citycouncil.documents_stats import document_artifact_stats
@@ -70,8 +71,54 @@ async def get_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
 
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 admin_router = APIRouter(prefix="/admin", dependencies=[Depends(verify_admin)])
+
+
+async def _run_activity_feed(
+    session: AsyncSession,
+    settings: Settings,
+    *,
+    since: str | None,
+    until: str | None,
+    types: str | None,
+    limit: int | None,
+    offset: int,
+    filter_q: str | None,
+    rss: bool,
+) -> ActivityFeedResponse:
+    try:
+        return await run_activity_feed(
+            session,
+            settings,
+            since=since,
+            until=until,
+            types=types,
+            limit=limit,
+            offset=offset,
+            filter_q=filter_q,
+            rss=rss,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+def _export_csv_or_json(
+    fmt: Literal["csv", "json"],
+    rows: Any,
+    *,
+    to_json: Callable[[Any], dict[str, object]],
+    to_csv: Callable[[Any], bytes],
+    filename: str,
+) -> dict[str, object] | Response:
+    if fmt == "json":
+        return to_json(rows)
+    return Response(
+        content=to_csv(rows),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 class SubscriptionCreate(BaseModel):
@@ -89,6 +136,7 @@ async def health() -> dict[str, str]:
 @app.get("/search/chunks")
 async def search_chunks(
     session: SessionDep,
+    settings: SettingsDep,
     q: str = Query(..., min_length=1, description="Natural-language query"),
     limit: int | None = Query(
         default=None,
@@ -104,8 +152,7 @@ async def search_chunks(
     file/URL fields from ``document_artifacts`` for verification. ``citations`` repeats
     chunk ids and scores for grounding; ``disclaimer`` reminds clients to verify sources.
     """
-    settings = get_settings()
-    if not settings.huggingface_token:
+    if not settings.huggingface_token_value():
         raise HTTPException(
             status_code=503,
             detail="CITYCOUNCIL_HUGGINGFACE_TOKEN is not set",
@@ -160,6 +207,7 @@ async def list_meetings(
 @app.get("/activity")
 async def activity_feed(
     session: SessionDep,
+    settings: SettingsDep,
     since: str | None = Query(
         default=None,
         description="ISO8601 lower bound (UTC). Omit to use CITYCOUNCIL_ACTIVITY_DEFAULT_SINCE_DAYS.",
@@ -174,31 +222,29 @@ async def activity_feed(
     filter_q: str | None = Query(
         default=None,
         alias="q",
-        description="Case-insensitive substring filter on titles, tags, meeting text, document names",
+        description="Case-insensitive substring filter (meetings: body, location, status, external_id; "
+        "ordinances: title, topic tags; documents: file name, URI, source URL)",
     ),
-) -> dict[str, object]:
+) -> ActivityFeedResponse:
     """Reverse-chronological feed of updated meetings/ordinances and new document artifacts."""
-    settings = get_settings()
-    try:
-        return await run_activity_feed(
-            session,
-            settings,
-            since=since,
-            until=until,
-            types=types,
-            limit=limit,
-            offset=offset,
-            filter_q=filter_q,
-            rss=False,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    return await _run_activity_feed(
+        session,
+        settings,
+        since=since,
+        until=until,
+        types=types,
+        limit=limit,
+        offset=offset,
+        filter_q=filter_q,
+        rss=False,
+    )
 
 
 @app.get("/feed.xml", response_model=None)
 async def activity_rss(
     request: Request,
     session: SessionDep,
+    settings: SettingsDep,
     since: str | None = Query(
         default=None,
         description="ISO8601 lower bound (UTC). Omit to use CITYCOUNCIL_ACTIVITY_DEFAULT_SINCE_DAYS.",
@@ -209,21 +255,17 @@ async def activity_rss(
     filter_q: str | None = Query(default=None, alias="q"),
 ) -> Response:
     """RSS 2.0 mirror of ``/activity`` (for readers and reporters)."""
-    settings = get_settings()
-    try:
-        payload = await run_activity_feed(
-            session,
-            settings,
-            since=since,
-            until=until,
-            types=types,
-            limit=limit,
-            offset=0,
-            filter_q=filter_q,
-            rss=True,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    payload = await _run_activity_feed(
+        session,
+        settings,
+        since=since,
+        until=until,
+        types=types,
+        limit=limit,
+        offset=0,
+        filter_q=filter_q,
+        rss=True,
+    )
     base = settings.public_base_url.rstrip("/")
     self_link = f"{request.url.scheme}://{request.url.netloc}{request.url.path}"
     xml = render_activity_rss(
@@ -306,12 +348,12 @@ async def admin_export_meetings(
 ) -> dict[str, object] | Response:
     """Bulk export of ``meetings`` (reporters / data journalism)."""
     rows = await load_meetings_ordered(session)
-    if fmt == "json":
-        return meetings_json(rows)
-    return Response(
-        content=meetings_csv(rows),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="meetings.csv"'},
+    return _export_csv_or_json(
+        fmt,
+        rows,
+        to_json=meetings_json,
+        to_csv=meetings_csv,
+        filename="meetings.csv",
     )
 
 
@@ -321,12 +363,12 @@ async def admin_export_ordinances(
     fmt: Literal["csv", "json"] = Query("csv", description="csv or json"),
 ) -> dict[str, object] | Response:
     rows = await load_ordinances_ordered(session)
-    if fmt == "json":
-        return ordinances_json(rows)
-    return Response(
-        content=ordinances_csv(rows),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="ordinances.csv"'},
+    return _export_csv_or_json(
+        fmt,
+        rows,
+        to_json=ordinances_json,
+        to_csv=ordinances_csv,
+        filename="ordinances.csv",
     )
 
 
@@ -336,12 +378,12 @@ async def admin_export_votes(
     fmt: Literal["csv", "json"] = Query("csv", description="csv or json"),
 ) -> dict[str, object] | Response:
     rows = await load_votes_with_refs(session)
-    if fmt == "json":
-        return votes_json(rows)
-    return Response(
-        content=votes_csv(rows),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="votes.csv"'},
+    return _export_csv_or_json(
+        fmt,
+        rows,
+        to_json=votes_json,
+        to_csv=votes_csv,
+        filename="votes.csv",
     )
 
 
@@ -352,12 +394,12 @@ async def admin_export_vote_members(
 ) -> dict[str, object] | Response:
     """Roll-call rows: one row per member per vote."""
     rows = await load_vote_members_with_refs(session)
-    if fmt == "json":
-        return vote_members_json(rows)
-    return Response(
-        content=vote_members_csv(rows),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="vote_members.csv"'},
+    return _export_csv_or_json(
+        fmt,
+        rows,
+        to_json=vote_members_json,
+        to_csv=vote_members_csv,
+        filename="vote_members.csv",
     )
 
 
@@ -392,10 +434,10 @@ async def admin_create_subscription(
 @admin_router.post("/ordinances/{ordinance_id}/summarize")
 async def admin_ordinance_summarize(
     session: SessionDep,
+    settings: SettingsDep,
     ordinance_id: UUID,
 ) -> dict[str, object]:
     """LLM-202: fill ``llm_summary`` and ``llm_tags`` via HF chat."""
-    settings = get_settings()
     try:
         return await summarize_ordinance(session, settings, ordinance_id)
     except ValueError as e:

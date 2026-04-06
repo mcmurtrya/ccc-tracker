@@ -52,6 +52,30 @@ def _norm_header(s: str) -> str:
     return (s or "").strip().lower()
 
 
+def _strip_or_none(value: str | None) -> str | None:
+    s = (value or "").strip()
+    return s if s else None
+
+
+def _make_staging_row(
+    batch_id: uuid.UUID,
+    row_number: int,
+    dedupe_key: str,
+    payload: dict[str, Any],
+    status: CsvStagingRowStatus,
+    errors: list[str] | None,
+) -> dict[str, Any]:
+    return {
+        "id": uuid.uuid4(),
+        "batch_id": batch_id,
+        "row_number": row_number,
+        "dedupe_key": dedupe_key,
+        "payload": payload,
+        "status": status,
+        "errors": errors,
+    }
+
+
 def validate_and_normalize_row(
     row: dict[str, str],
     row_number: int,
@@ -83,7 +107,7 @@ def validate_and_normalize_row(
         if ierr:
             errors.append(ierr)
 
-    extra_keys = set(_norm_header(k) for k in row.keys()) - ALLOWED_COLUMNS
+    extra_keys = {_norm_header(k) for k in row.keys()} - ALLOWED_COLUMNS
     if extra_keys:
         errors.append(f"unknown columns: {sorted(extra_keys)}")
 
@@ -94,12 +118,12 @@ def validate_and_normalize_row(
             "meeting_id": meet_id,
             "meeting_date": md.isoformat() if md else None,
             "title": title,
-            "sponsor_id": (row.get("sponsor_id") or "").strip() or None,
+            "sponsor_id": _strip_or_none(row.get("sponsor_id")),
             "introduced_date": intro.isoformat() if intro else None,
             "topic_tags": parse_topic_tags(row.get("topic_tags")),
-            "meeting_body": (row.get("meeting_body") or "").strip() or None,
-            "location": (row.get("location") or "").strip() or None,
-            "meeting_status": (row.get("meeting_status") or "").strip() or None,
+            "meeting_body": _strip_or_none(row.get("meeting_body")),
+            "location": _strip_or_none(row.get("location")),
+            "meeting_status": _strip_or_none(row.get("meeting_status")),
         }
     )
     return norm, errors
@@ -148,11 +172,9 @@ async def load_csv_to_staging(session: AsyncSession, path: Path | str) -> CsvLoa
     for r in reader:
         rows_raw.append({_norm_header(k): (v or "") for k, v in r.items() if k is not None})
 
-    ord_ids_in_file: list[str] = []
-    for r in rows_raw:
-        oid = (r.get("ordinance_id") or "").strip()
-        if oid:
-            ord_ids_in_file.append(oid)
+    ord_ids_in_file = [
+        oid for r in rows_raw if (oid := (r.get("ordinance_id") or "").strip())
+    ]
 
     existing_in_db: set[str] = set()
     if ord_ids_in_file:
@@ -175,15 +197,14 @@ async def load_csv_to_staging(session: AsyncSession, path: Path | str) -> CsvLoa
         if verrors:
             invalid += 1
             staging_rows.append(
-                {
-                    "id": uuid.uuid4(),
-                    "batch_id": batch_id,
-                    "row_number": i,
-                    "dedupe_key": dedupe_key,
-                    "payload": norm,
-                    "status": CsvStagingRowStatus.invalid,
-                    "errors": verrors,
-                }
+                _make_staging_row(
+                    batch_id,
+                    i,
+                    dedupe_key,
+                    norm,
+                    CsvStagingRowStatus.invalid,
+                    verrors,
+                )
             )
             continue
 
@@ -191,45 +212,42 @@ async def load_csv_to_staging(session: AsyncSession, path: Path | str) -> CsvLoa
         if oid in seen_in_file:
             dup_file += 1
             staging_rows.append(
-                {
-                    "id": uuid.uuid4(),
-                    "batch_id": batch_id,
-                    "row_number": i,
-                    "dedupe_key": dedupe_key,
-                    "payload": norm,
-                    "status": CsvStagingRowStatus.duplicate_file,
-                    "errors": ["duplicate ordinance_id earlier in this file"],
-                }
+                _make_staging_row(
+                    batch_id,
+                    i,
+                    dedupe_key,
+                    norm,
+                    CsvStagingRowStatus.duplicate_file,
+                    ["duplicate ordinance_id earlier in this file"],
+                )
             )
             continue
 
         if oid in existing_in_db:
             dup_db += 1
             staging_rows.append(
-                {
-                    "id": uuid.uuid4(),
-                    "batch_id": batch_id,
-                    "row_number": i,
-                    "dedupe_key": dedupe_key,
-                    "payload": norm,
-                    "status": CsvStagingRowStatus.duplicate_db,
-                    "errors": ["ordinance_id already exists in ordinances table"],
-                }
+                _make_staging_row(
+                    batch_id,
+                    i,
+                    dedupe_key,
+                    norm,
+                    CsvStagingRowStatus.duplicate_db,
+                    ["ordinance_id already exists in ordinances table"],
+                )
             )
             continue
 
         seen_in_file.add(oid)
         accepted += 1
         staging_rows.append(
-            {
-                "id": uuid.uuid4(),
-                "batch_id": batch_id,
-                "row_number": i,
-                "dedupe_key": dedupe_key,
-                "payload": norm,
-                "status": CsvStagingRowStatus.accepted,
-                "errors": None,
-            }
+            _make_staging_row(
+                batch_id,
+                i,
+                dedupe_key,
+                norm,
+                CsvStagingRowStatus.accepted,
+                None,
+            )
         )
 
     now = utc_now()

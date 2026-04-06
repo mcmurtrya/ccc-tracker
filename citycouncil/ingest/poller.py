@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,13 @@ from citycouncil.ingest.dlq import record_dlq
 from citycouncil.ingest.elms_adapter import adapt_elms_poll_response
 from citycouncil.ingest.elms_enrich import maybe_enrich_poll_payload
 from citycouncil.ingest.normalize import ingest_payload
+
+
+class PollCycleResult(TypedDict):
+    """Successful return from :func:`run_poll_cycle` (errors raise)."""
+
+    status: Literal["ok"]
+    ingested_meeting_ids: list[str]
 
 
 async def _load_fixture(path: str) -> dict[str, Any]:
@@ -62,7 +69,7 @@ async def fetch_payload(settings: Settings | None = None) -> dict[str, Any]:
 async def run_poll_cycle(
     session: AsyncSession,
     settings: Settings | None = None,
-) -> dict[str, Any]:
+) -> PollCycleResult:
     settings = settings or get_settings()
     payload: dict[str, Any] | None = None
     try:
@@ -86,7 +93,7 @@ async def run_poll_cycle(
         raise
 
 
-async def run_poll_standalone(settings: Settings | None = None) -> dict[str, Any]:
+async def run_poll_standalone(settings: Settings | None = None) -> PollCycleResult:
     settings = settings or get_settings()
     async with standalone_session(settings) as session:
         try:

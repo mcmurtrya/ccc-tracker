@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 from uuid import UUID
 
 import httpx
@@ -14,13 +14,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from citycouncil.config import Settings, get_settings
 from citycouncil.db.models import DocumentArtifact, DocumentChunk, ParseStatus
 from citycouncil.db.session import standalone_session
-from citycouncil.ingest.documents_sync import _download_bytes_limited
+from citycouncil.ingest.http_download import download_bytes_limited
 from citycouncil.ingest.pdf_ocr import extract_pdf_ocr_chunks
 from citycouncil.ingest.pdf_text import extract_pdf_chunks, scan_pdf_metadata
 
 logger = logging.getLogger(__name__)
 
 _ALLOWED_STATUS = frozenset({"pending", "failed", "pending_or_failed", "all"})
+
+
+class ExtractDocumentsStandaloneResult(TypedDict):
+    """Return value of :func:`extract_documents_standalone`."""
+
+    processed: int
+    ok: int
+    failed: int
+    total_chunks: int
+    needs_review_marked: int
+    artifact_ids: list[str]
+    status_filter: str
 
 
 def _load_bytes_from_local(artifact: DocumentArtifact, settings: Settings) -> bytes | None:
@@ -74,7 +86,7 @@ async def extract_one_artifact(
                     "error": artifact.parse_error,
                     "needs_review": False,
                 }
-            data = await _download_bytes_limited(client, url, settings.documents_max_bytes)
+            data = await download_bytes_limited(client, url, settings.documents_max_bytes)
         chunk_rows = extract_pdf_chunks(data, settings.extract_max_chars_per_chunk)
         meta = scan_pdf_metadata(data)
         used_ocr = False
@@ -152,14 +164,14 @@ async def extract_documents_standalone(
     limit: int | None = None,
     artifact_id: UUID | None = None,
     status_filter: str = "pending",
-) -> dict[str, Any]:
+) -> ExtractDocumentsStandaloneResult:
     settings = settings or get_settings()
     if status_filter not in _ALLOWED_STATUS:
         raise ValueError(
             f"status_filter must be one of {sorted(_ALLOWED_STATUS)}, got {status_filter!r}"
         )
     lim = limit if limit is not None else settings.extract_max_documents
-    out: dict[str, Any] = {
+    out: ExtractDocumentsStandaloneResult = {
         "processed": 0,
         "ok": 0,
         "failed": 0,

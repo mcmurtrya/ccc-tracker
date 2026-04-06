@@ -2,7 +2,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from citycouncil.pipeline import run_pipeline_standalone
+from citycouncil.pipeline import (
+    STEP_EMBED_RUN,
+    STEP_EXTRACT_DOCUMENTS,
+    STEP_MIGRATE,
+    STEP_POLL,
+    STEP_SYNC_DOCUMENTS,
+    run_pipeline_standalone,
+)
 
 
 async def test_pipeline_all_skipped() -> None:
@@ -14,11 +21,11 @@ async def test_pipeline_all_skipped() -> None:
         run_embed_run=False,
     )
     assert [s["step"] for s in out["steps"]] == [
-        "migrate",
-        "poll",
-        "sync-documents",
-        "extract-documents",
-        "embed-run",
+        STEP_MIGRATE,
+        STEP_POLL,
+        STEP_SYNC_DOCUMENTS,
+        STEP_EXTRACT_DOCUMENTS,
+        STEP_EMBED_RUN,
     ]
     assert all(s["result"] == "skipped" for s in out["steps"])
 
@@ -68,11 +75,11 @@ async def test_pipeline_executes_each_step_when_enabled(
     mock_check.assert_called_once()
     names = [s["step"] for s in out["steps"]]
     assert names == [
-        "migrate",
-        "poll",
-        "sync-documents",
-        "extract-documents",
-        "embed-run",
+        STEP_MIGRATE,
+        STEP_POLL,
+        STEP_SYNC_DOCUMENTS,
+        STEP_EXTRACT_DOCUMENTS,
+        STEP_EMBED_RUN,
     ]
     assert out["steps"][0]["result"] == {"status": "ok"}
     assert out["steps"][1]["result"] == {"p": 1}

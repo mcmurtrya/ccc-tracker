@@ -1,5 +1,9 @@
-from pydantic import Field
+from typing import Self
+
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from citycouncil.constants import PGVECTOR_EMBEDDING_DIMENSION
 
 
 class Settings(BaseSettings):
@@ -58,8 +62,16 @@ class Settings(BaseSettings):
         default="fixtures/sample_elms_response.json",
     )
 
-    poller_timeout_seconds: float = 60.0
-    poller_max_retries: int = 3
+    poller_timeout_seconds: float = Field(
+        default=60.0,
+        description="HTTP timeout for ELMS poller requests (seconds)",
+    )
+    poller_max_retries: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        description="Retries for transient ELMS poller failures",
+    )
 
     documents_sync_max_meetings: int = Field(
         default=50,
@@ -99,12 +111,15 @@ class Settings(BaseSettings):
         description="Max characters per document_chunks.body slice (TXT-101)",
     )
     embedding_dimensions: int = Field(
-        default=384,
+        default=PGVECTOR_EMBEDDING_DIMENSION,
         ge=8,
         le=8192,
-        description="Must match the Hugging Face model output dimension (e.g. 384 for all-MiniLM-L6-v2)",
+        description=(
+            "Must match the Hugging Face model output dimension and "
+            f"``constants.PGVECTOR_EMBEDDING_DIMENSION`` ({PGVECTOR_EMBEDDING_DIMENSION} for all-MiniLM-L6-v2)"
+        ),
     )
-    huggingface_token: str | None = Field(
+    huggingface_token: SecretStr | None = Field(
         default=None,
         description="Hugging Face API token with Inference Providers access (CITYCOUNCIL_HUGGINGFACE_TOKEN)",
     )
@@ -136,16 +151,36 @@ class Settings(BaseSettings):
         default="HuggingFaceTB/SmolLM2-360M-Instruct",
         description="Chat model id for ordinance summarize (HF router)",
     )
-    huggingface_chat_timeout: float = Field(default=120.0, ge=10.0, le=600.0)
-    huggingface_chat_max_tokens: int = Field(default=512, ge=64, le=4096)
+    huggingface_chat_timeout: float = Field(
+        default=120.0,
+        ge=10.0,
+        le=600.0,
+        description="HTTP timeout for HF chat (ordinance summarize)",
+    )
+    huggingface_chat_max_tokens: int = Field(
+        default=512,
+        ge=64,
+        le=4096,
+        description="max_tokens for HF chat completions (ordinance summarize)",
+    )
     llm_summarize_prompt_version: str = Field(
         default="1",
         min_length=1,
         max_length=64,
         description="Bumped when ordinance summarize system prompt changes (stored on ordinances row)",
     )
-    search_default_limit: int = Field(default=10, ge=1, le=50)
-    search_max_limit: int = Field(default=30, ge=1, le=100)
+    search_default_limit: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Default result count for GET /search/chunks (clamped to search_max_limit)",
+    )
+    search_max_limit: int = Field(
+        default=30,
+        ge=1,
+        le=100,
+        description="Upper bound when clamping /search/chunks limit",
+    )
     search_chunk_preview_chars: int = Field(
         default=400,
         ge=80,
@@ -167,11 +202,11 @@ class Settings(BaseSettings):
         le=3650,
         description="When GET /activity has no since=, use UTC now minus this many days",
     )
-    activity_q_max_scan: int = Field(
-        default=2000,
-        ge=50,
-        le=50_000,
-        description="Max SQL rows scanned when /activity?q= filters in memory before pagination",
+    activity_q_max_chars: int = Field(
+        default=500,
+        ge=16,
+        le=10_000,
+        description="Max characters for GET /activity?q= (longer values are truncated)",
     )
     public_base_url: str = Field(
         default="http://127.0.0.1:8000",
@@ -207,10 +242,48 @@ class Settings(BaseSettings):
         description="Truncate chunk body to this many characters before embedding",
     )
 
-    admin_api_key: str | None = Field(
+    admin_api_key: SecretStr | None = Field(
         default=None,
         description="If set, required for /admin/* (X-Admin-Key or Authorization: Bearer). If unset, admin routes return 503.",
     )
+
+    @field_validator("huggingface_token", "admin_api_key", mode="before")
+    @classmethod
+    def _empty_secret_env_to_none(cls, v: object) -> object:
+        """Treat empty env as unset so tests can override a non-empty .env entry."""
+        if v == "" or v is None:
+            return None
+        return v
+
+    @model_validator(mode="after")
+    def _search_and_activity_limits_ordered(self) -> Self:
+        if self.search_max_limit < self.search_default_limit:
+            raise ValueError("search_max_limit must be >= search_default_limit")
+        if self.activity_max_limit < self.activity_default_limit:
+            raise ValueError("activity_max_limit must be >= activity_default_limit")
+        return self
+
+    def huggingface_token_value(self) -> str | None:
+        """Plain HF token for Authorization headers, or None if unset/empty."""
+        tok = self.huggingface_token
+        if tok is None:
+            return None
+        if isinstance(tok, SecretStr):
+            s = tok.get_secret_value()
+        else:
+            s = str(tok)
+        return s if s else None
+
+    def admin_api_key_value(self) -> str | None:
+        """Plain admin API key for comparison, or None if unset/empty."""
+        key = self.admin_api_key
+        if key is None:
+            return None
+        if isinstance(key, SecretStr):
+            s = key.get_secret_value()
+        else:
+            s = str(key)
+        return s if s else None
 
 
 def database_url_sync(url: str) -> str:
@@ -221,4 +294,10 @@ def database_url_sync(url: str) -> str:
 
 
 def get_settings() -> Settings:
+    """Load settings from environment and optional ``.env``.
+
+    Returns a new ``Settings`` instance each call (no process-wide cache): caching breaks
+    tests and local overrides when combined with FastAPI lifespan and ``TestClient`` env
+    monkeypatching. Cost is one pydantic parse per dependency resolution.
+    """
     return Settings()

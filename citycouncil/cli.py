@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import subprocess
 import sys
+import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import uvicorn
-
-import json
-import uuid
 
 from citycouncil.config import get_settings
 from citycouncil.csv_loader import load_csv_standalone
@@ -23,6 +23,24 @@ from citycouncil.pipeline import run_pipeline_standalone
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _ensure_config_loaded() -> None:
+    """Load and validate settings so bad env fails before any subcommand runs."""
+    get_settings()
+
+
+def run_async(coro_factory: Callable[[], Awaitable[object]]) -> None:
+    asyncio.run(coro_factory())
+
+
+def _print_json(obj: object) -> None:
+    print(json.dumps(obj, indent=2, default=str))
+
+
+def _reject_mutually_exclusive_flags(flag_a: bool, flag_b: bool, message: str) -> None:
+    if flag_a and flag_b:
+        raise SystemExit(message)
+
+
 def _cmd_migrate(_: argparse.Namespace) -> None:
     subprocess.check_call([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=ROOT)
 
@@ -30,17 +48,17 @@ def _cmd_migrate(_: argparse.Namespace) -> None:
 def _cmd_poll(_: argparse.Namespace) -> None:
     async def _run() -> None:
         out = await run_poll_standalone()
-        print(out)
+        _print_json(out)
 
-    asyncio.run(_run())
+    run_async(_run)
 
 
 def _cmd_sync_documents(args: argparse.Namespace) -> None:
     async def _run() -> None:
         out = await sync_documents_standalone(meeting_external_id=args.meeting_external_id)
-        print(out)
+        _print_json(out)
 
-    asyncio.run(_run())
+    run_async(_run)
 
 
 def _cmd_extract_documents(args: argparse.Namespace) -> None:
@@ -51,14 +69,17 @@ def _cmd_extract_documents(args: argparse.Namespace) -> None:
             artifact_id=aid,
             status_filter=args.status,
         )
-        print(out)
+        _print_json(out)
 
-    asyncio.run(_run())
+    run_async(_run)
 
 
 def _cmd_embed_run(args: argparse.Namespace) -> None:
-    if args.enqueue_only and args.process_only:
-        raise SystemExit("Cannot combine --enqueue-only and --process-only")
+    _reject_mutually_exclusive_flags(
+        args.enqueue_only,
+        args.process_only,
+        "Cannot combine --enqueue-only and --process-only",
+    )
 
     async def _run() -> None:
         out = await embed_run_standalone(
@@ -67,14 +88,17 @@ def _cmd_embed_run(args: argparse.Namespace) -> None:
             enqueue_limit=args.enqueue_limit,
             process_limit=args.process_limit,
         )
-        print(out)
+        _print_json(out)
 
-    asyncio.run(_run())
+    run_async(_run)
 
 
 def _cmd_pipeline(args: argparse.Namespace) -> None:
-    if args.embed_enqueue_only and args.embed_process_only:
-        raise SystemExit("Cannot combine --embed-enqueue-only and --embed-process-only")
+    _reject_mutually_exclusive_flags(
+        args.embed_enqueue_only,
+        args.embed_process_only,
+        "Cannot combine --embed-enqueue-only and --embed-process-only",
+    )
 
     async def _run() -> None:
         out = await run_pipeline_standalone(
@@ -91,15 +115,15 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
             embed_enqueue_limit=args.embed_enqueue_limit,
             embed_process_limit=args.embed_process_limit,
         )
-        print(json.dumps(out, indent=2, default=str))
+        _print_json(out)
 
-    asyncio.run(_run())
+    run_async(_run)
 
 
 def _cmd_load_csv(args: argparse.Namespace) -> None:
     async def _run() -> None:
         out = await load_csv_standalone(args.path)
-        print(
+        _print_json(
             {
                 "batch_id": out.batch_id,
                 "file_sha256": out.file_sha256,
@@ -111,25 +135,25 @@ def _cmd_load_csv(args: argparse.Namespace) -> None:
             }
         )
 
-    asyncio.run(_run())
+    run_async(_run)
 
 
 def _cmd_promote_csv(args: argparse.Namespace) -> None:
     async def _run() -> None:
         bid = uuid.UUID(args.batch_id) if args.batch_id else None
         out = await promote_standalone(batch_id=bid)
-        print({"promoted": out.promoted, "failed": out.failed})
+        _print_json({"promoted": out.promoted, "failed": out.failed})
 
-    asyncio.run(_run())
+    run_async(_run)
 
 
 def _cmd_csv_reconcile(args: argparse.Namespace) -> None:
     async def _run() -> None:
         bid = uuid.UUID(args.batch_id) if args.batch_id else None
         out = await reconciliation_standalone(batch_id=bid)
-        print(json.dumps(out, indent=2, default=str))
+        _print_json(out)
 
-    asyncio.run(_run())
+    run_async(_run)
 
 
 def _cmd_serve(args: argparse.Namespace) -> None:
@@ -141,7 +165,7 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     )
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="citycouncil")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -316,8 +340,12 @@ def main() -> None:
     p_serve.add_argument("--reload", action="store_true")
     p_serve.set_defaults(func=_cmd_serve)
 
-    args = parser.parse_args()
-    get_settings()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    _ensure_config_loaded()
     args.func(args)
 
 

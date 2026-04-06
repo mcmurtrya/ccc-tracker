@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import httpx
 from sqlalchemy import select
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from citycouncil.config import Settings, get_settings
 from citycouncil.db.models import DocumentArtifact, Meeting, ParseStatus
 from citycouncil.db.session import standalone_session
+from citycouncil.ingest.http_download import download_bytes_limited
 
 logger = logging.getLogger(__name__)
 
@@ -43,19 +44,14 @@ def _is_pdf_candidate(url: str, file_name: str | None) -> bool:
     return fn.endswith(".pdf")
 
 
-async def _download_bytes_limited(
-    client: httpx.AsyncClient, url: str, max_bytes: int
-) -> bytes:
-    async with client.stream("GET", url, follow_redirects=True) as r:
-        r.raise_for_status()
-        chunks: list[bytes] = []
-        total = 0
-        async for chunk in r.aiter_bytes():
-            total += len(chunk)
-            if total > max_bytes:
-                raise ValueError(f"download exceeds max_bytes={max_bytes}")
-            chunks.append(chunk)
-    return b"".join(chunks)
+class DocumentsSyncTotals(TypedDict):
+    """Return value of :func:`sync_documents_standalone`."""
+
+    meetings: int
+    downloaded: int
+    skipped: int
+    errors: int
+    meeting_ids: list[str]
 
 
 async def sync_meeting_documents(
@@ -92,7 +88,7 @@ async def sync_meeting_documents(
             continue
 
         try:
-            data = await _download_bytes_limited(client, url, settings.documents_max_bytes)
+            data = await download_bytes_limited(client, url, settings.documents_max_bytes)
         except Exception as e:
             logger.warning("download failed %s: %s", url, e)
             errors += 1
@@ -128,9 +124,9 @@ async def sync_meeting_documents(
 async def sync_documents_standalone(
     settings: Settings | None = None,
     meeting_external_id: str | None = None,
-) -> dict[str, Any]:
+) -> DocumentsSyncTotals:
     settings = settings or get_settings()
-    totals: dict[str, Any] = {
+    totals: DocumentsSyncTotals = {
         "meetings": 0,
         "downloaded": 0,
         "skipped": 0,

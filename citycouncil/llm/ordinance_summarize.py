@@ -3,33 +3,47 @@
 from __future__ import annotations
 
 import json
-import re
-from typing import Any
+from typing import TypedDict
 from uuid import UUID
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from citycouncil.config import Settings
 from citycouncil.db.models import Ordinance, utc_now
+from citycouncil.llm.hf_chat import ChatMessage, huggingface_chat_completion
+from citycouncil.llm.json_response import extract_json_object
+
+SYSTEM_PROMPT_ORDINANCE_SUMMARIZE = (
+    "Respond with a single JSON object only, no markdown, no commentary. "
+    'Schema: {"summary": string (2-4 sentences), "tags": string[] (up to 8 short topical tags)}'
+)
 
 
-def _extract_json_object(text: str) -> dict[str, Any]:
-    t = text.strip()
-    fence = re.match(r"^```(?:json)?\s*([\s\S]*?)```\s*$", t)
-    if fence:
-        t = fence.group(1).strip()
-    return json.loads(t)
+def _user_prompt_ordinance(title: str, payload_preview: str) -> str:
+    return f"Title:\n{title}\n\nContext (JSON, may be truncated):\n{payload_preview}"
+
+
+class SummarizeOrdinanceResult(TypedDict):
+    """API / DB shape after summarizing an ordinance."""
+
+    ordinance_id: str
+    external_id: str
+    llm_summary: str | None
+    llm_tags: list[str] | None
+    llm_summary_model: str | None
+    llm_summary_prompt_version: str | None
+    llm_summarized_at: str | None
 
 
 async def summarize_ordinance(
     session: AsyncSession,
     settings: Settings,
     ordinance_id: UUID,
-) -> dict[str, Any]:
+) -> SummarizeOrdinanceResult:
     """Fill ``ordinance.llm_summary`` and ``ordinance.llm_tags`` from HF chat."""
-    if not settings.huggingface_token:
+    hf_tok = settings.huggingface_token_value()
+    if not hf_tok:
         raise ValueError("CITYCOUNCIL_HUGGINGFACE_TOKEN is not set")
 
     q = await session.execute(select(Ordinance).where(Ordinance.id == ordinance_id))
@@ -37,34 +51,14 @@ async def summarize_ordinance(
     if ord_row is None:
         raise ValueError(f"ordinance not found: {ordinance_id}")
 
-    system = (
-        "Respond with a single JSON object only, no markdown, no commentary. "
-        'Schema: {"summary": string (2-4 sentences), "tags": string[] (up to 8 short topical tags)}'
-    )
     payload_preview = json.dumps(ord_row.raw_json or {}, default=str)[:8000]
-    user = f"Title:\n{ord_row.title}\n\nContext (JSON, may be truncated):\n{payload_preview}"
-
-    async with httpx.AsyncClient(timeout=settings.huggingface_chat_timeout) as client:
-        r = await client.post(
-            settings.huggingface_chat_router_url,
-            headers={
-                "Authorization": f"Bearer {settings.huggingface_token}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": settings.huggingface_chat_model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "max_tokens": settings.huggingface_chat_max_tokens,
-                "temperature": 0.2,
-            },
-        )
-    r.raise_for_status()
-    data = r.json()
-    content = data["choices"][0]["message"]["content"]
-    parsed = _extract_json_object(content)
+    user = _user_prompt_ordinance(ord_row.title, payload_preview)
+    messages: list[ChatMessage] = [
+        {"role": "system", "content": SYSTEM_PROMPT_ORDINANCE_SUMMARIZE},
+        {"role": "user", "content": user},
+    ]
+    content = await huggingface_chat_completion(settings, messages)
+    parsed = extract_json_object(content)
     summary = str(parsed.get("summary", "")).strip()
     tags_raw = parsed.get("tags")
     tags: list[str] = []

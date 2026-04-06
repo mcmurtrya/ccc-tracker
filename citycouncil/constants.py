@@ -1,4 +1,7 @@
 """Shared constants (keep in sync with Alembic pgvector migration)."""
 
-# Default embedding size for all-MiniLM-L6-v2; pgvector column is fixed to this dimension.
-PGVECTOR_EMBEDDING_DIMENSION = 384
+from typing import Final
+
+# Fixed pgvector column width; must match Alembic ``document_chunks.embedding_vector`` and
+# :attr:`~citycouncil.config.Settings.embedding_dimensions` default.
+PGVECTOR_EMBEDDING_DIMENSION: Final[int] = 384

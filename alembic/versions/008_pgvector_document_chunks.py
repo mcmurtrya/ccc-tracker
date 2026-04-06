@@ -10,24 +10,24 @@ from typing import Sequence, Union
 
 from alembic import op
 
+from citycouncil.constants import PGVECTOR_EMBEDDING_DIMENSION
+
 revision: str = "008"
 down_revision: Union[str, None] = "007"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-# Must match default CITYCOUNCIL_EMBEDDING_DIMENSIONS (384) for HNSW + embed_jobs sync.
-PGVECTOR_DIM = 384
-
 
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    op.execute(f"ALTER TABLE document_chunks ADD COLUMN embedding_vector vector({PGVECTOR_DIM})")
+    dim = PGVECTOR_EMBEDDING_DIMENSION
+    op.execute(f"ALTER TABLE document_chunks ADD COLUMN embedding_vector vector({dim})")
     op.execute(
-        """
+        f"""
         UPDATE document_chunks
         SET embedding_vector = ('[' || array_to_string(embedding, ',') || ']')::vector
         WHERE embedding IS NOT NULL
-          AND array_length(embedding, 1) = 384
+          AND array_length(embedding, 1) = {dim}
         """
     )
 

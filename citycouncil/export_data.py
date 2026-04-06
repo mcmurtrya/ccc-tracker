@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from io import StringIO
-from typing import Any
+from typing import TypedDict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,91 @@ def _dt(v: datetime | None) -> str:
 
 def _d(v: date | None) -> str:
     return v.isoformat() if v else ""
+
+
+def _csv_bytes(header: list[str], rows: Iterable[Sequence[object]]) -> bytes:
+    buf = StringIO()
+    w = csv.writer(buf)
+    w.writerow(header)
+    for row in rows:
+        w.writerow(row)
+    return buf.getvalue().encode("utf-8")
+
+
+def _vote_meeting_ordinance(v: Vote | None) -> tuple[Meeting | None, Ordinance | None]:
+    if not v:
+        return (None, None)
+    return (v.meeting, v.ordinance)
+
+
+class MeetingExportItem(TypedDict):
+    id: str
+    external_id: str
+    meeting_date: str
+    body: str | None
+    location: str | None
+    status: str | None
+    created_at: str
+    updated_at: str
+
+
+class MeetingsExportJson(TypedDict):
+    count: int
+    items: list[MeetingExportItem]
+
+
+class OrdinanceExportItem(TypedDict):
+    id: str
+    external_id: str
+    title: str
+    sponsor_external_id: str | None
+    introduced_date: str
+    topic_tags: list[str] | None
+    created_at: str
+    updated_at: str
+
+
+class OrdinancesExportJson(TypedDict):
+    count: int
+    items: list[OrdinanceExportItem]
+
+
+class VoteExportItem(TypedDict):
+    vote_id: str
+    vote_external_id: str | None
+    meeting_id: str
+    meeting_external_id: str | None
+    ordinance_id: str
+    ordinance_external_id: str | None
+    result: str | None
+    ayes: int | None
+    nays: int | None
+    abstentions: int | None
+    created_at: str
+
+
+class VotesExportJson(TypedDict):
+    count: int
+    items: list[VoteExportItem]
+
+
+class VoteMemberExportItem(TypedDict):
+    vote_id: str | None
+    vote_external_id: str | None
+    meeting_id: str | None
+    meeting_external_id: str | None
+    ordinance_id: str | None
+    ordinance_external_id: str | None
+    member_id: str
+    member_external_id: str | None
+    member_name: str | None
+    ward: int | None
+    position: str
+
+
+class VoteMembersExportJson(TypedDict):
+    count: int
+    items: list[VoteMemberExportItem]
 
 
 async def load_meetings_ordered(session: AsyncSession) -> list[Meeting]:
@@ -55,9 +141,7 @@ async def load_vote_members_with_refs(session: AsyncSession) -> list[VoteMember]
 
 
 def meetings_csv(rows: list[Meeting]) -> bytes:
-    buf = StringIO()
-    w = csv.writer(buf)
-    w.writerow(
+    return _csv_bytes(
         [
             "id",
             "external_id",
@@ -67,10 +151,8 @@ def meetings_csv(rows: list[Meeting]) -> bytes:
             "status",
             "created_at",
             "updated_at",
-        ]
-    )
-    for m in rows:
-        w.writerow(
+        ],
+        (
             [
                 str(m.id),
                 m.external_id,
@@ -81,48 +163,33 @@ def meetings_csv(rows: list[Meeting]) -> bytes:
                 _dt(m.created_at),
                 _dt(m.updated_at),
             ]
-        )
-    return buf.getvalue().encode("utf-8")
-
-
-def meetings_json(rows: list[Meeting]) -> dict[str, Any]:
-    return {
-        "count": len(rows),
-        "items": [
-            {
-                "id": str(m.id),
-                "external_id": m.external_id,
-                "meeting_date": _d(m.meeting_date),
-                "body": m.body,
-                "location": m.location,
-                "status": m.status,
-                "created_at": _dt(m.created_at),
-                "updated_at": _dt(m.updated_at),
-            }
             for m in rows
-        ],
-    }
+        ),
+    )
+
+
+def meetings_json(rows: list[Meeting]) -> MeetingsExportJson:
+    items: list[MeetingExportItem] = [
+        {
+            "id": str(m.id),
+            "external_id": m.external_id,
+            "meeting_date": _d(m.meeting_date),
+            "body": m.body,
+            "location": m.location,
+            "status": m.status,
+            "created_at": _dt(m.created_at),
+            "updated_at": _dt(m.updated_at),
+        }
+        for m in rows
+    ]
+    return {"count": len(rows), "items": items}
 
 
 def ordinances_csv(rows: list[Ordinance]) -> bytes:
-    buf = StringIO()
-    w = csv.writer(buf)
-    w.writerow(
-        [
-            "id",
-            "external_id",
-            "title",
-            "sponsor_external_id",
-            "introduced_date",
-            "topic_tags",
-            "created_at",
-            "updated_at",
-        ]
-    )
-    for o in rows:
-        tags = ",".join(o.topic_tags or []) if o.topic_tags else ""
-        w.writerow(
-            [
+    def rows_iter():
+        for o in rows:
+            tags = ",".join(o.topic_tags or []) if o.topic_tags else ""
+            yield [
                 str(o.id),
                 o.external_id,
                 o.title,
@@ -132,52 +199,44 @@ def ordinances_csv(rows: list[Ordinance]) -> bytes:
                 _dt(o.created_at),
                 _dt(o.updated_at),
             ]
-        )
-    return buf.getvalue().encode("utf-8")
 
-
-def ordinances_json(rows: list[Ordinance]) -> dict[str, Any]:
-    return {
-        "count": len(rows),
-        "items": [
-            {
-                "id": str(o.id),
-                "external_id": o.external_id,
-                "title": o.title,
-                "sponsor_external_id": o.sponsor_external_id,
-                "introduced_date": _d(o.introduced_date),
-                "topic_tags": o.topic_tags,
-                "created_at": _dt(o.created_at),
-                "updated_at": _dt(o.updated_at),
-            }
-            for o in rows
+    return _csv_bytes(
+        [
+            "id",
+            "external_id",
+            "title",
+            "sponsor_external_id",
+            "introduced_date",
+            "topic_tags",
+            "created_at",
+            "updated_at",
         ],
-    }
+        rows_iter(),
+    )
+
+
+def ordinances_json(rows: list[Ordinance]) -> OrdinancesExportJson:
+    items: list[OrdinanceExportItem] = [
+        {
+            "id": str(o.id),
+            "external_id": o.external_id,
+            "title": o.title,
+            "sponsor_external_id": o.sponsor_external_id,
+            "introduced_date": _d(o.introduced_date),
+            "topic_tags": o.topic_tags,
+            "created_at": _dt(o.created_at),
+            "updated_at": _dt(o.updated_at),
+        }
+        for o in rows
+    ]
+    return {"count": len(rows), "items": items}
 
 
 def votes_csv(rows: list[Vote]) -> bytes:
-    buf = StringIO()
-    w = csv.writer(buf)
-    w.writerow(
-        [
-            "vote_id",
-            "vote_external_id",
-            "meeting_id",
-            "meeting_external_id",
-            "ordinance_id",
-            "ordinance_external_id",
-            "result",
-            "ayes",
-            "nays",
-            "abstentions",
-            "created_at",
-        ]
-    )
-    for v in rows:
-        meet = v.meeting
-        ord_ = v.ordinance
-        w.writerow(
-            [
+    def rows_iter():
+        for v in rows:
+            meet, ord_ = _vote_meeting_ordinance(v)
+            yield [
                 str(v.id),
                 v.external_id or "",
                 str(v.meeting_id),
@@ -190,16 +249,30 @@ def votes_csv(rows: list[Vote]) -> bytes:
                 v.abstentions if v.abstentions is not None else "",
                 _dt(v.created_at),
             ]
-        )
-    return buf.getvalue().encode("utf-8")
+
+    return _csv_bytes(
+        [
+            "vote_id",
+            "vote_external_id",
+            "meeting_id",
+            "meeting_external_id",
+            "ordinance_id",
+            "ordinance_external_id",
+            "result",
+            "ayes",
+            "nays",
+            "abstentions",
+            "created_at",
+        ],
+        rows_iter(),
+    )
 
 
-def votes_json(rows: list[Vote]) -> dict[str, Any]:
-    out: list[dict[str, Any]] = []
+def votes_json(rows: list[Vote]) -> VotesExportJson:
+    items: list[VoteExportItem] = []
     for v in rows:
-        meet = v.meeting
-        ord_ = v.ordinance
-        out.append(
+        meet, ord_ = _vote_meeting_ordinance(v)
+        items.append(
             {
                 "vote_id": str(v.id),
                 "vote_external_id": v.external_id,
@@ -214,34 +287,16 @@ def votes_json(rows: list[Vote]) -> dict[str, Any]:
                 "created_at": _dt(v.created_at),
             }
         )
-    return {"count": len(out), "items": out}
+    return {"count": len(items), "items": items}
 
 
 def vote_members_csv(rows: list[VoteMember]) -> bytes:
-    buf = StringIO()
-    w = csv.writer(buf)
-    w.writerow(
-        [
-            "vote_id",
-            "vote_external_id",
-            "meeting_id",
-            "meeting_external_id",
-            "ordinance_id",
-            "ordinance_external_id",
-            "member_id",
-            "member_external_id",
-            "member_name",
-            "ward",
-            "position",
-        ]
-    )
-    for vm in rows:
-        v = vm.vote
-        meet = v.meeting if v else None
-        ord_ = v.ordinance if v else None
-        mem = vm.member
-        w.writerow(
-            [
+    def rows_iter():
+        for vm in rows:
+            v = vm.vote
+            meet, ord_ = _vote_meeting_ordinance(v)
+            mem = vm.member
+            yield [
                 str(v.id) if v else "",
                 v.external_id if v else "",
                 str(v.meeting_id) if v else "",
@@ -254,16 +309,30 @@ def vote_members_csv(rows: list[VoteMember]) -> bytes:
                 mem.ward if mem.ward is not None else "",
                 vm.position.value,
             ]
-        )
-    return buf.getvalue().encode("utf-8")
+
+    return _csv_bytes(
+        [
+            "vote_id",
+            "vote_external_id",
+            "meeting_id",
+            "meeting_external_id",
+            "ordinance_id",
+            "ordinance_external_id",
+            "member_id",
+            "member_external_id",
+            "member_name",
+            "ward",
+            "position",
+        ],
+        rows_iter(),
+    )
 
 
-def vote_members_json(rows: list[VoteMember]) -> dict[str, Any]:
-    items: list[dict[str, Any]] = []
+def vote_members_json(rows: list[VoteMember]) -> VoteMembersExportJson:
+    items: list[VoteMemberExportItem] = []
     for vm in rows:
         v = vm.vote
-        meet = v.meeting if v else None
-        ord_ = v.ordinance if v else None
+        meet, ord_ = _vote_meeting_ordinance(v)
         mem = vm.member
         items.append(
             {

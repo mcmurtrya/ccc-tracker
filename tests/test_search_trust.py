@@ -1,15 +1,20 @@
-from citycouncil.rag.search import citations_from_chunk_results
+from citycouncil.rag.search import ChunkSearchHit, citations_from_chunk_results
 
 
 def test_citations_from_chunk_results_shape() -> None:
-    items = [
+    items: list[ChunkSearchHit] = [
         {
             "chunk_id": "c1",
-            "document_artifact_id": "d1",
-            "meeting_id": "m1",
-            "page_number": 2,
-            "score": 0.9,
+            "chunk_index": 0,
             "body": "x",
+            "body_preview": "x",
+            "page_number": 2,
+            "meeting_id": "m1",
+            "meeting": None,
+            "document_artifact_id": "d1",
+            "document": {"file_name": None, "source_url": None, "uri": None},
+            "distance": 0.1,
+            "score": 0.9,
         }
     ]
     c = citations_from_chunk_results(items)

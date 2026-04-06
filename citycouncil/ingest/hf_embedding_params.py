@@ -19,7 +19,7 @@ def hf_feature_extraction_call_kwargs(settings: Settings, *, for_query: bool = F
         else settings.huggingface_prompt_name
     )
     return {
-        "api_token": settings.huggingface_token or "",
+        "api_token": settings.huggingface_token_value() or "",
         "model": settings.huggingface_embedding_model,
         "expected_dimensions": settings.embedding_dimensions,
         "normalize": settings.huggingface_normalize_embeddings,
